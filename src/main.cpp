@@ -21,23 +21,24 @@ void picInterrupt(){
 //ATTITUDE_QUATERNION
 void setup() {
   Serial1.begin(115200);
-  SerialUSB.begin(115200);
+  //SerialUSB.begin(115200);
   memset(msgByteBuffer, 0, sizeof(msgByteBuffer));
 
   int status = imu.begin();
-  imu.setSampleRate(1000); //Use 1000hz update rate
-  imu.setLPF(188);
-  imu.setCompassSampleRate(100);
+  //imu.setSampleRate(1000); //Use 1000hz update rate
+  //imu.setCompassSampleRate(100);
 
   imu.enableInterrupt(0);
   imu.setIntLevel(1); //Active_low interrupt
 
-  imu.dmpBegin(DMP_FEATURE_6X_LP_QUAT | DMP_FEATURE_SEND_RAW_ACCEL | DMP_FEATURE_SEND_RAW_GYRO, 200);
+  imu.dmpBegin(DMP_FEATURE_GYRO_CAL | DMP_FEATURE_6X_LP_QUAT | DMP_FEATURE_SEND_RAW_ACCEL | DMP_FEATURE_SEND_CAL_GYRO, 100);
+  imu.setAccelFSR(4);
+  imu.setGyroFSR(1000);
+    imu.setLPF(98);
 
   if(imu.selfTest() != 0x7){
     //Self test failed
     //Die
-    pinMode(13, OUTPUT);
     for(;;){
         Serial1.write(0xDE); Serial1.write(0xAD);
     }
@@ -78,16 +79,18 @@ void loop() {
       float magZ = imu.calcMag(imu.mz);
 
       mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q1, q2, q3, q4, gyroX, gyroY, gyroZ);
-      msgBuffer.emplace(msg);
+      if(q1 && q2 && q3 && q4){
+        msgBuffer.emplace(msg);
+      }
 
       imu.computeEulerAngles();
-      SerialUSB.println("R/P/Y: " + String(imu.roll) + ", "
-            + String(imu.pitch) + ", " + String(imu.yaw));
+      //SerialUSB.println("R/P/Y: " + String(imu.roll) + ", "
+      //      + String(imu.pitch) + ", " + String(imu.yaw));
 
       //mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_IMU, &msg, millis(), accelX, accelY, accelZ, gyroX, gyroY, gyroZ, magX, magY, magZ);
       //msgBuffer.emplace(msg);
 
-      SerialUSB.println("Sending");
+      //SerialUSB.println("Sending");
     }
 
     if(millis() - lastHb > 1000){ //Send a hb every second
