@@ -3,9 +3,11 @@
 #include <Wire.h>
 #include <SparkFunMPU9250-DMP.h>
 #include <common/mavlink.h>
+#include "state_estimator.h"
 
 MPU9250_DMP imu;
 volatile ssize_t cts = 0;
+volatile bool imuReady = false;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -14,27 +16,62 @@ size_t msgLen = 0;
 
 unsigned long lastHb = 0;
 
+float acc[3];
+float gyro[3];
+float mag[3];
+
+float q[4];
+float euler_angles[3];
+
+unsigned long lastImuTime = 0;
+
+void initIMUValues(){
+  memset(acc, 0, sizeof(acc));
+  memset(gyro, 0, sizeof(gyro));
+  memset(mag, 0, sizeof(mag));
+
+  memset(q, 0, sizeof(q));
+  q[0] = 1.0;
+  memset(euler_angles, 0, sizeof(euler_angles));
+  lastImuTime = micros();
+}
+
 void picInterrupt(){
   cts = 3;
 }
+
+void imuInterrupt(){
+  imuReady = true;
+}
+
 //SCALED_IMU
 //ATTITUDE_QUATERNION
+
 void setup() {
+  pinMode(4, INPUT_PULLUP);
+  //attachInterrupt(digitalPinToInterrupt(4), imuInterrupt, FALLING);
+
   Serial1.begin(115200);
-  //SerialUSB.begin(115200);
+  SerialUSB.begin(115200);
+  while(!SerialUSB);
+  SerialUSB.println("hello there");
+
   memset(msgByteBuffer, 0, sizeof(msgByteBuffer));
 
   int status = imu.begin();
-  //imu.setSampleRate(1000); //Use 1000hz update rate
-  //imu.setCompassSampleRate(100);
+  imu.setSensors(INV_XYZ_GYRO | INV_XYZ_ACCEL | INV_XYZ_COMPASS);
+  imu.setSampleRate(1000); //Use 1000hz update rate
+  imu.setCompassSampleRate(100);
 
-  imu.enableInterrupt(0);
-  imu.setIntLevel(1); //Active_low interrupt
-
-  imu.dmpBegin(DMP_FEATURE_GYRO_CAL | DMP_FEATURE_6X_LP_QUAT | DMP_FEATURE_SEND_RAW_ACCEL | DMP_FEATURE_SEND_CAL_GYRO, 100);
   imu.setAccelFSR(4);
   imu.setGyroFSR(1000);
-    imu.setLPF(98);
+  imu.setLPF(98);
+
+  imu.enableInterrupt();
+  imu.setIntLevel(INT_ACTIVE_LOW); //Active_low interrupt
+  imu.setIntLatched(INT_LATCHED);
+
+  initIMUValues();
 
   if(imu.selfTest() != 0x7){
     //Self test failed
@@ -44,62 +81,60 @@ void setup() {
     }
   }
 
-  //pinMode(4, INPUT);
-  //attachInterrupt(4, imuInterrupt, RISING);
-
   pinMode(13, INPUT);
-  attachInterrupt(13, picInterrupt, FALLING);
+  attachInterrupt(digitalPinToInterrupt(13), picInterrupt, FALLING);
 
   lastHb = millis();
 }
 
 void loop() {
-  //Only update msgs if buffer has space
-  if(msgBuffer.size() < 4){
-    mavlink_message_t msg;
+  mavlink_message_t msg;
 
-    if(imu.fifoAvailable() && imu.dmpUpdateFifo() == INV_SUCCESS){
-      imu.updateCompass();
-      imu.computeCompassHeading();
+  if(true){
+    imu.update(UPDATE_ACCEL | UPDATE_GYRO | UPDATE_COMPASS);
+    imuReady = false;
 
-      //Read all values from imu
-      float q1 = imu.calcQuat(imu.qw);
-      float q2 = imu.calcQuat(imu.qx);
-      float q3 = imu.calcQuat(imu.qy);
-      float q4 = imu.calcQuat(imu.qz);
+    acc[0] = imu.calcAccel(imu.ax);
+    acc[1] = imu.calcAccel(imu.ay);
+    acc[2] = imu.calcAccel(imu.az);
 
-      float accelX = imu.calcAccel(imu.ax);
-      float accelY = imu.calcAccel(imu.ay);
-      float accelZ = imu.calcAccel(imu.az);
-      float gyroX = imu.calcGyro(imu.gx);
-      float gyroY = imu.calcGyro(imu.gy);
-      float gyroZ = imu.calcGyro(imu.gz);
-      float magX = imu.calcMag(imu.mx);
-      float magY = imu.calcMag(imu.my);
-      float magZ = imu.calcMag(imu.mz);
+    SerialUSB.print(acc[0]);
 
-      mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q1, q2, q3, q4, gyroX, gyroY, gyroZ);
-      if(q1 && q2 && q3 && q4){
-        msgBuffer.emplace(msg);
-      }
+    gyro[0] = imu.calcGyro(imu.gx);
+    gyro[1] = imu.calcGyro(imu.gy);
+    gyro[2] = imu.calcGyro(imu.gz);
 
-      imu.computeEulerAngles();
-      //SerialUSB.println("R/P/Y: " + String(imu.roll) + ", "
-      //      + String(imu.pitch) + ", " + String(imu.yaw));
+    mag[0] = imu.calcMag(imu.mx);
+    mag[1] = imu.calcMag(imu.my);
+    mag[2] = imu.calcMag(imu.mz);
 
-      //mavlink_msg_raw_imu_pack(1, MAV_COMP_ID_IMU, &msg, millis(), accelX, accelY, accelZ, gyroX, gyroY, gyroZ, magX, magY, magZ);
-      //msgBuffer.emplace(msg);
+    float dt = ((micros() - lastImuTime) / 1000000.0f);
 
-      //SerialUSB.println("Sending");
-    }
+    UpdateState(acc, gyro, mag, q, dt, euler_angles);
+    lastImuTime = micros();
 
-    if(millis() - lastHb > 1000){ //Send a hb every second
-      mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_IMU, &msg, 0,0,0,0,1);
-      msgBuffer.emplace(msg);
-      
-      lastHb = millis();
-    }
+    mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q[0], q[1], q[2], q[3], gyro[0], gyro[1], gyro[2]);
+    msgBuffer.emplace(msg);
+    
+    SerialUSB.print("Roll: ");
+    SerialUSB.print(euler_angles[0]);
+    SerialUSB.print(" Pitch: ");
+    SerialUSB.print(euler_angles[1]);
+    SerialUSB.print(" Yaw: ");
+    SerialUSB.println(euler_angles[2]);
+  }  
+
+  if(millis() - lastHb > 1000){ //Send a hb every second
+    mavlink_msg_heartbeat_pack(1, MAV_COMP_ID_IMU, &msg, 0,0,0,0,1);
+    msgBuffer.emplace(msg);
+    
+    lastHb = millis();
   }
+
+  if(msgBuffer.size() > 10){
+    while(!msgBuffer.empty()) msgBuffer.pop();
+  }
+  
 
   if(cts > 0 && !msgBuffer.empty()){
     if(currentByte == msgLen){
