@@ -1,0 +1,3 @@
+[submodule "lib/MahonyAHRS"]
+	path = lib/MahonyAHRS
+	url = https://github.com/PaulStoffregen/MahonyAHRS.git
