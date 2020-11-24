@@ -4,9 +4,7 @@
 #include <MPU9250.h>
 #include <common/mavlink.h>
 
-extern "C"{
-#include "MadgwickAHRS.h"
-}
+#include "SensorFusion.h"
 
 MPU9250 imu(Wire, 0x68);
 volatile ssize_t cts = 0;
@@ -16,7 +14,7 @@ const float radsToDegs = (180.0f / M_PI);
 
 bool calibrated = false;
 
-const bool enableMotionCal = true;
+const bool enableMotionCal = false;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -32,6 +30,8 @@ float mag[3];
 float euler_angles[3];
 
 unsigned long lastImuTime = 0;
+
+NXPSensorFusion fusion;
 
 void initIMUValues(){
   memset(acc, 0, sizeof(acc));
@@ -65,11 +65,8 @@ void setup() {
   memset(msgByteBuffer, 0, sizeof(msgByteBuffer));
 
   int status = imu.begin();
-  imu.setSrd(9); //Use 100hz update rate
 
-  imu.setAccelRange(MPU9250::ACCEL_RANGE_4G);
-  imu.setGyroRange(MPU9250::GYRO_RANGE_1000DPS);
-  imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_41HZ);
+  //imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_184HZ);
 
   initIMUValues();
 
@@ -94,60 +91,66 @@ void setup() {
   imu.setMagCalY(-8.17f, 1.021f);
   imu.setMagCalZ(-18.98f, 0.9783f);
 
+  imu.setAccelRange(MPU9250::ACCEL_RANGE_4G);
+  imu.setGyroRange(MPU9250::GYRO_RANGE_2000DPS);
+  imu.setSrd(0); //Use 100hz update rate
+
+  fusion.begin(33);
+
   lastHb = millis();
 }
 
 void loop() {
   mavlink_message_t msg;
 
-  if(millis() - lastImuTime > 2){ //500hz
+  if(millis() - lastImuTime > 20){ //500hz
     imu.readSensor();
     imuReady = false;
 
-    acc[0] = imu.getAccelX_mss();//m/s/s
-    acc[1] = imu.getAccelY_mss();
-    acc[2] = imu.getAccelZ_mss();
+    acc[0] = imu.getAccelX_mss() / 9.8;//m/s/s
+    acc[1] = imu.getAccelY_mss() / 9.8;
+    acc[2] = imu.getAccelZ_mss() / 9.8;
 
-    gyro[0] = imu.getGyroX_rads();//rads
-    gyro[1] = imu.getGyroY_rads();
-    gyro[2] = imu.getGyroZ_rads();
+    gyro[0] = imu.getGyroX_rads() * radsToDegs;//degrees
+    gyro[1] = imu.getGyroY_rads() * radsToDegs;
+    gyro[2] = imu.getGyroZ_rads() * radsToDegs;
 
     mag[0] = imu.getMagX_uT();//uT
     mag[1] = imu.getMagY_uT();
     mag[2] = imu.getMagZ_uT();
 
-    
-    MadgwickAHRSupdate(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
-    lastImuTime = millis();
+    fusion.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
 
-    mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q0, q1, q2, q3, gyro[0], gyro[1], gyro[2]);
-    msgBuffer.emplace(msg);
-
-    float q[] = {q0, q1, q2, q3};
-    mavlink_quaternion_to_euler(q, &euler_angles[0], &euler_angles[1], &euler_angles[2]);
-    
+    //mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q0, q1, q2, q3, gyro[0], gyro[1], gyro[2]);
+    //msgBuffer.emplace(msg);
 
     if(!enableMotionCal){
-      SerialUSB.print("Roll: ");
-      SerialUSB.print(euler_angles[0]);
-      SerialUSB.print(" Pitch: ");
-      SerialUSB.print(euler_angles[1]);
-      SerialUSB.print(" Yaw: ");
-      SerialUSB.println(euler_angles[2]);
+      unsigned long dt = millis() - lastImuTime;
+      //SerialUSB.print("DT: ");
+      //SerialUSB.print(dt);
+      //SerialUSB.print(" Roll: ");
+      SerialUSB.print(fusion.getRoll());
+      SerialUSB.print(',');
+      //SerialUSB.print(" Pitch: ");
+      SerialUSB.print(fusion.getPitch());
+      SerialUSB.print(',');
+      //SerialUSB.print(" Yaw: ");
+      SerialUSB.print(fusion.getYaw());
+      SerialUSB.println(',');
     } else{
       //MotionCal
       SerialUSB.print("Raw:");
-      SerialUSB.print(int(acc[0]*8192/9.8));
+      SerialUSB.print(int(acc[0]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(acc[1]*8192/9.8));
+      SerialUSB.print(int(acc[1]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(acc[2]*8192/9.8));
+      SerialUSB.print(int(acc[2]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[0] * 16 * radsToDegs));
+      SerialUSB.print(int(gyro[0] * 16));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[1] * 16 * radsToDegs));
+      SerialUSB.print(int(gyro[1] * 16));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[2] * 16 * radsToDegs));
+      SerialUSB.print(int(gyro[2] * 16));
       SerialUSB.print(',');
       SerialUSB.print(int(mag[0] * 10));
       SerialUSB.print(',');
@@ -156,7 +159,8 @@ void loop() {
       SerialUSB.print(int(mag[2] * 10));
       SerialUSB.println();
     }
-    
+
+    lastImuTime = millis();
   }  
 
   if(millis() - lastHb > 500){ //Send a hb every second
