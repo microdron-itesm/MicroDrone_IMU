@@ -14,7 +14,7 @@ const float radsToDegs = (180.0f / M_PI);
 
 bool calibrated = false;
 
-const bool enableMotionCal = true;
+const bool enableMotionCal = false;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -118,24 +118,28 @@ void loop() {
     mag[1] = imu.getMagY_uT();
     mag[2] = imu.getMagZ_uT();
 
-    filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
+    //filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
+    filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
 
     mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), filter.q0, filter.q1, filter.q2, filter.q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
     msgBuffer.emplace(msg);
 
     if(!enableMotionCal){
       unsigned long dt = (micros() - lastImuTime) / 1000;
+      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+      float roll, pitch, yaw;
+      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
       //SerialUSB.print("DT: ");
       SerialUSB.print(dt);
       SerialUSB.print(',');
       //SerialUSB.print(" Roll: ");
-      SerialUSB.print(filter.getRoll());
+      SerialUSB.print(roll);
       SerialUSB.print(',');
       //SerialUSB.print(" Pitch: ");
-      SerialUSB.print(filter.getPitch());
+      SerialUSB.print(pitch);
       SerialUSB.print(',');
       //SerialUSB.print(" Yaw: ");
-      SerialUSB.print(filter.getYaw());
+      SerialUSB.print(yaw);
       SerialUSB.println(',');
     } else{
       //MotionCal

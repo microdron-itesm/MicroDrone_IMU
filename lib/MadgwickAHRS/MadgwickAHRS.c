@@ -22,8 +22,8 @@
 //---------------------------------------------------------------------------------------------------
 // Definitions
 
-#define sampleFreq	1000.0f		// sample frequency in Hz
-#define betaDef		4.0f
+#define sampleFreq	512.0f		// sample frequency in Hz
+#define betaDef		0.50f
 
 //---------------------------------------------------------------------------------------------------
 // Variable definitions
