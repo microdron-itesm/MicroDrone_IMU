@@ -5,6 +5,8 @@
 #include <common/mavlink.h>
 
 #include "MahonyAHRS.h"
+#include "MadgwickAHRS.h"
+
 
 MPU9250 imu(Wire, 0x68);
 volatile ssize_t cts = 0;
@@ -14,7 +16,8 @@ const float radsToDegs = (180.0f / M_PI);
 
 bool calibrated = false;
 
-const bool enableMotionCal = false;
+const bool enableMotionCal = true;
+const bool enableWebViewer = false;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -31,7 +34,7 @@ float euler_angles[3];
 
 unsigned long lastImuTime = 0;
 
-Mahony filter;
+Madgwick filter;
 
 void initIMUValues(){
   memset(acc, 0, sizeof(acc));
@@ -88,15 +91,18 @@ void setup() {
     while(1);
   }
   
-  imu.setMagCalX(-18.16f, 1.028f);
-  imu.setMagCalY(160.94f, 1.070f);
-  imu.setMagCalZ(47.55f, 0.920f);
+  imu.setMagCalX(-10.93f, 0.954f);
+  imu.setMagCalY(163.88f, 1.2f);
+  imu.setMagCalZ(61.23f, 0.902f);
 
-  imu.setAccelRange(MPU9250::ACCEL_RANGE_4G);
+  imu.setAccelRange(MPU9250::ACCEL_RANGE_8G);
   imu.setGyroRange(MPU9250::GYRO_RANGE_2000DPS);
   imu.setSrd(0); //Use 100hz update rate
+  imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_20HZ);
 
   lastHb = millis();
+
+  filter.begin(512);
 }
 
 void loop() {
@@ -118,30 +124,16 @@ void loop() {
     mag[1] = imu.getMagY_uT();
     mag[2] = imu.getMagZ_uT();
 
-    //filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
-    filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
+    filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
+    // MadgwickAHRSupdate(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
+    //filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
 
     mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), filter.q0, filter.q1, filter.q2, filter.q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
+
+    // mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q0, q1, q2, q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
     msgBuffer.emplace(msg);
 
-    if(!enableMotionCal){
-      unsigned long dt = (micros() - lastImuTime) / 1000;
-      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
-      float roll, pitch, yaw;
-      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
-      //SerialUSB.print("DT: ");
-      SerialUSB.print(dt);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Roll: ");
-      SerialUSB.print(roll);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Pitch: ");
-      SerialUSB.print(pitch);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Yaw: ");
-      SerialUSB.print(yaw);
-      SerialUSB.println(',');
-    } else{
+    if(enableMotionCal){
       //MotionCal
       SerialUSB.print("Raw:");
       SerialUSB.print(int(acc[0]*8192));
@@ -162,6 +154,58 @@ void loop() {
       SerialUSB.print(',');
       SerialUSB.print(int(mag[2] * 10));
       SerialUSB.println();
+    } else if(enableWebViewer){
+      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+      float roll, pitch, yaw;
+
+      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
+      SerialUSB.print(("Orientation: "));
+      SerialUSB.print((float)yaw * RAD_TO_DEG);
+      SerialUSB.print((" "));
+      SerialUSB.print((float)pitch * RAD_TO_DEG);
+      SerialUSB.print((" "));
+      SerialUSB.print((float)roll * RAD_TO_DEG);
+      SerialUSB.println((""));
+
+      // SerialUSB.print(("Orientation: "));
+      // SerialUSB.print((float)0);
+      // SerialUSB.print((", "));
+      // SerialUSB.print((float)0);
+      // SerialUSB.print((", "));
+      // SerialUSB.print((float)0);
+      // SerialUSB.println((""));
+
+
+      // SerialUSB.print(("Quaternion: "));
+      // SerialUSB.print((float)filter.q0);
+      // SerialUSB.print((", "));
+      // SerialUSB.print((float)filter.q1);
+      // SerialUSB.print((", "));
+      // SerialUSB.print((float)filter.q2);
+      // SerialUSB.print((", "));
+      // SerialUSB.print((float)filter.q3);
+      // SerialUSB.println((""));
+
+      //SerialUSB.println("Calibration: 0, 0, 0, 0");
+
+
+    } else{
+      unsigned long dt = (micros() - lastImuTime) / 1000;
+      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+      float roll, pitch, yaw;
+      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
+      //SerialUSB.print("DT: ");
+      SerialUSB.print(dt);
+      SerialUSB.print(',');
+      //SerialUSB.print(" Roll: ");
+      SerialUSB.print(roll);
+      SerialUSB.print(',');
+      //SerialUSB.print(" Pitch: ");
+      SerialUSB.print(pitch);
+      SerialUSB.print(',');
+      //SerialUSB.print(" Yaw: ");
+      SerialUSB.print(yaw);
+      SerialUSB.println(',');
     }
 
     lastImuTime = micros();
