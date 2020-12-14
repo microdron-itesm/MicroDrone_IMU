@@ -16,8 +16,8 @@ const float radsToDegs = (180.0f / M_PI);
 
 bool calibrated = false;
 
-const bool enableMotionCal = true;
-const bool enableWebViewer = false;
+const bool enableMotionCal = false;
+const bool enableWebViewer = true;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -77,7 +77,7 @@ void setup() {
   pinMode(13, INPUT);
   attachInterrupt(digitalPinToInterrupt(13), picInterrupt, FALLING);
 
-  status = imu.calibrateGyro();
+  //status = imu.calibrateGyro();
 
   if(status < 0){
     //Die
@@ -85,20 +85,20 @@ void setup() {
   }
 
 
-  status = imu.calibrateAccel();
+  //status = imu.calibrateAccel();
   if(status < 0){
     //Die
     while(1);
   }
   
-  imu.setMagCalX(-10.93f, 0.954f);
-  imu.setMagCalY(163.88f, 1.2f);
-  imu.setMagCalZ(61.23f, 0.902f);
+  //imu.setMagCalX(-10.93f, 0.954f);
+  //imu.setMagCalY(163.88f, 1.2f);
+  //imu.setMagCalZ(61.23f, 0.902f);
 
-  imu.setAccelRange(MPU9250::ACCEL_RANGE_8G);
-  imu.setGyroRange(MPU9250::GYRO_RANGE_2000DPS);
+  imu.setAccelRange(MPU9250::ACCEL_RANGE_4G);
+  imu.setGyroRange(MPU9250::GYRO_RANGE_1000DPS);
   imu.setSrd(0); //Use 100hz update rate
-  imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_20HZ);
+  imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_5HZ);
 
   lastHb = millis();
 
@@ -107,9 +107,9 @@ void setup() {
 
 void loop() {
   mavlink_message_t msg;
+  imu.readSensor();
 
-  if(micros() - lastImuTime > 1953.125){ //500hz
-    imu.readSensor();
+  if(micros() - lastImuTime > 10000){ //250hz
     imuReady = false;
 
     acc[0] = imu.getAccelX_mss();//m/s/s
@@ -124,9 +124,9 @@ void loop() {
     mag[1] = imu.getMagY_uT();
     mag[2] = imu.getMagZ_uT();
 
-    filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
+    // filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
     // MadgwickAHRSupdate(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
-    //filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
+    filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
 
     mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), filter.q0, filter.q1, filter.q2, filter.q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
 
@@ -218,7 +218,7 @@ void loop() {
     lastHb = millis();
   }
 
-  if(msgBuffer.size() > 10){
+  if(msgBuffer.size() > 2){
     while(!msgBuffer.empty()) msgBuffer.pop();
   }
   
