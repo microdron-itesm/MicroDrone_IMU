@@ -7,13 +7,16 @@
 //
 // Code generated for Simulink model 'IMU_Fusion'.
 //
-// Model version                  : 1.3
+// Model version                  : 1.5
 // Simulink Coder version         : 9.4 (R2020b) 29-Jul-2020
-// C/C++ source code generated on : Thu Feb 18 00:20:09 2021
+// C/C++ source code generated on : Thu Feb 18 02:03:51 2021
 //
 // Target selection: ert.tlc
 // Embedded hardware selection: ARM Compatible->ARM Cortex-M
-// Code generation objectives: Unspecified
+// Code generation objectives:
+//    1. Execution efficiency
+//    2. ROM efficiency
+//    3. RAM efficiency
 // Validation result: Not run
 //
 #ifndef RTW_HEADER_IMU_Fusion_h_
@@ -23,8 +26,8 @@
 #include "rtwtypes.h"
 #include "IMU_Fusion_types.h"
 #include "rt_defines.h"
-#include "rt_nonfinite.h"
 #include "rtGetInf.h"
+#include "rt_nonfinite.h"
 
 // Macros for accessing real-time model data structure
 #ifndef rtmGetErrorStatus
@@ -117,6 +120,12 @@ class IMU_FusionModelClass {
 
   // Destructor
   ~IMU_FusionModelClass();
+
+  // Block parameters get method
+  const IMU_FusionModelClass::P_IMU_Fusion_T & getBlockParameters() const;
+
+  // Block parameters set method
+  void setBlockParameters(const P_IMU_Fusion_T *pIMU_Fusion_P);
 
   // Root-level structure-based inputs set method
 

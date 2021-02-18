@@ -68,7 +68,7 @@ void setup() {
   SerialUSB.begin(115200);
 
   pinMode(4, INPUT_PULLUP);
-  while(!SerialUSB);
+  //while(!SerialUSB);
   //attachInterrupt(digitalPinToInterrupt(4), imuInterrupt, FALLING);
 
   //SD Card init
