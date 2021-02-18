@@ -6,6 +6,8 @@
 
 #include "MahonyAHRS.h"
 #include "MadgwickAHRS.h"
+//#include <SPI.h>
+#include <SD.h>
 
 
 MPU9250 imu(Wire, 0x68);
@@ -17,7 +19,9 @@ const float radsToDegs = (180.0f / M_PI);
 bool calibrated = false;
 
 const bool enableMotionCal = false;
-const bool enableWebViewer = true;
+const bool enableWebViewer = false;
+
+float m0, m1, m2, m3;
 
 std::queue<mavlink_message_t> msgBuffer;
 uint8_t msgByteBuffer[MAVLINK_MAX_PACKET_LEN + sizeof(uint64_t)];
@@ -36,6 +40,9 @@ unsigned long lastImuTime = 0;
 
 Madgwick filter;
 
+File logFile;
+String buffer;
+
 void initIMUValues(){
   memset(acc, 0, sizeof(acc));
   memset(gyro, 0, sizeof(gyro));
@@ -53,17 +60,50 @@ void imuInterrupt(){
   imuReady = true;
 }
 
+String generateFileName(int num){
+  String sNum(num, DEC);
+  return String("log_") + sNum + String(".csv");
+}
+
 //SCALED_IMU
 //ATTITUDE_QUATERNION
 
 void setup() {
-  pinMode(4, INPUT_PULLUP);
-  //attachInterrupt(digitalPinToInterrupt(4), imuInterrupt, FALLING);
-
   Serial1.begin(115200);
   SerialUSB.begin(115200);
+
+  pinMode(4, INPUT_PULLUP);
   //while(!SerialUSB);
-  SerialUSB.println("DT,Roll,Pitch,Yaw");
+  //attachInterrupt(digitalPinToInterrupt(4), imuInterrupt, FALLING);
+
+  //SD Card init
+  buffer.reserve(4096);
+
+  while(!SD.begin(38)){
+    SerialUSB.println("SD failed!");
+    //while(1);
+  }
+
+  //SD Card init done
+  File root = SD.open("/");
+  int fileNum = 0;
+  while(SD.exists(generateFileName(fileNum))){
+    fileNum++;
+  }
+
+  SerialUSB.print("Using: "); SerialUSB.println(generateFileName(fileNum));
+  logFile = SD.open(generateFileName(fileNum), FILE_WRITE);
+
+  if(!logFile){
+    SerialUSB.println("log open failed");
+    while(1);
+  }
+
+  //Write csv header to sd card
+  logFile.println("Micros,Roll,Pitch,Yaw,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,M1,M2,M3,M4");
+
+  //while(!SerialUSB);
+  //SerialUSB.println("DT,Roll,Pitch,Yaw");
   //SerialUSB.println("hello there");
 
   memset(msgByteBuffer, 0, sizeof(msgByteBuffer));
@@ -106,7 +146,8 @@ void setup() {
 }
 
 void loop() {
-  mavlink_message_t msg;
+  mavlink_message_t msg, inMsg;
+  mavlink_status_t status;
   imu.readSensor();
 
   if(micros() - lastImuTime > 10000){ //250hz
@@ -129,6 +170,38 @@ void loop() {
     filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
 
     mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), filter.q0, filter.q1, filter.q2, filter.q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
+
+    float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+    float roll, pitch, yaw;
+
+    mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
+
+    buffer += micros(); buffer += ',';
+    
+    //RPY
+    buffer += roll; buffer += ',';
+    buffer += pitch; buffer += ',';
+    buffer += yaw; buffer += ',';
+
+    //Accel
+    buffer += acc[0]; buffer += ',';
+    buffer += acc[1]; buffer += ',';
+    buffer += acc[2]; buffer += ',';
+
+    //Gyro
+    buffer += gyro[0]; buffer += ',';
+    buffer += gyro[1]; buffer += ',';
+    buffer += gyro[2]; buffer += ',';
+
+    //Mag
+    buffer += mag[0]; buffer += ',';
+    buffer += mag[1]; buffer += ',';
+    buffer += mag[2]; buffer += ',';
+    
+    buffer += m0; buffer += ',';
+    buffer += m1; buffer += ',';
+    buffer += m2; buffer += ',';
+    buffer += m3; buffer += '\n';
 
     // mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), q0, q1, q2, q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
     msgBuffer.emplace(msg);
@@ -155,10 +228,6 @@ void loop() {
       SerialUSB.print(int(mag[2] * 10));
       SerialUSB.println();
     } else if(enableWebViewer){
-      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
-      float roll, pitch, yaw;
-
-      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
       SerialUSB.print(("Orientation: "));
       SerialUSB.print((float)yaw * RAD_TO_DEG);
       SerialUSB.print((" "));
@@ -195,17 +264,17 @@ void loop() {
       float roll, pitch, yaw;
       mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
       //SerialUSB.print("DT: ");
-      SerialUSB.print(dt);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Roll: ");
-      SerialUSB.print(roll);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Pitch: ");
-      SerialUSB.print(pitch);
-      SerialUSB.print(',');
-      //SerialUSB.print(" Yaw: ");
-      SerialUSB.print(yaw);
-      SerialUSB.println(',');
+      // SerialUSB.print(dt);
+      // SerialUSB.print(',');
+      // //SerialUSB.print(" Roll: ");
+      // SerialUSB.print(roll);
+      // SerialUSB.print(',');
+      // //SerialUSB.print(" Pitch: ");
+      // SerialUSB.print(pitch);
+      // SerialUSB.print(',');
+      // //SerialUSB.print(" Yaw: ");
+      // SerialUSB.print(yaw);
+      // SerialUSB.println(',');
     }
 
     lastImuTime = micros();
@@ -218,7 +287,7 @@ void loop() {
     lastHb = millis();
   }
 
-  if(msgBuffer.size() > 2){
+  if(msgBuffer.size() > 4){
     while(!msgBuffer.empty()) msgBuffer.pop();
   }
   
@@ -232,5 +301,31 @@ void loop() {
 
     Serial1.write(msgByteBuffer[currentByte++]);
     cts--;
+  }
+
+  while(Serial1.available() > 0){
+    uint8_t c = Serial1.read();
+    if(mavlink_parse_char(MAVLINK_COMM_0, c, &inMsg, &status)){
+      switch(inMsg.msgid){
+        case MAVLINK_MSG_ID_DEBUG_FLOAT_ARRAY:
+          mavlink_debug_float_array_t debugArray;
+          mavlink_msg_debug_float_array_decode(&inMsg, &debugArray);
+          m0 = debugArray.data[0];
+          m1 = debugArray.data[1];
+          m2 = debugArray.data[2];
+          m3 = debugArray.data[3];
+          break;
+      }
+    }
+  }
+
+  unsigned int chunkSize = logFile.availableForWrite();
+  if (chunkSize && buffer.length() >= chunkSize) {
+    //SerialUSB.println("Writing to SD!");
+    // write to file and blink LED
+    logFile.write(buffer.c_str(), chunkSize);
+
+    // remove written data from buffer
+    buffer.remove(0, chunkSize);
   }
 }
