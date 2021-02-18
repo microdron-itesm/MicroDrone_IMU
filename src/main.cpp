@@ -9,6 +9,8 @@
 //#include <SPI.h>
 #include <SD.h>
 
+#include "IMU_Fusion.h"
+
 
 MPU9250 imu(Wire, 0x68);
 volatile ssize_t cts = 0;
@@ -30,25 +32,18 @@ size_t msgLen = 0;
 
 unsigned long lastHb = 0;
 
-float acc[3];
-float gyro[3];
-float mag[3];
-
-float euler_angles[3];
+IMU_FusionModelClass::ExtU_IMU_Fusion_T ahrsIn;
+IMU_FusionModelClass imuFusion;
 
 unsigned long lastImuTime = 0;
-
-Madgwick filter;
 
 File logFile;
 String buffer;
 
 void initIMUValues(){
-  memset(acc, 0, sizeof(acc));
-  memset(gyro, 0, sizeof(gyro));
-  memset(mag, 0, sizeof(mag));
+  memset(&ahrsIn, 0, sizeof(ahrsIn));
 
-  memset(euler_angles, 0, sizeof(euler_angles));
+  imuFusion.initialize();
   lastImuTime = micros();
 }
 
@@ -73,7 +68,7 @@ void setup() {
   SerialUSB.begin(115200);
 
   pinMode(4, INPUT_PULLUP);
-  //while(!SerialUSB);
+  while(!SerialUSB);
   //attachInterrupt(digitalPinToInterrupt(4), imuInterrupt, FALLING);
 
   //SD Card init
@@ -141,8 +136,6 @@ void setup() {
   imu.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_5HZ);
 
   lastHb = millis();
-
-  filter.begin(512);
 }
 
 void loop() {
@@ -153,28 +146,32 @@ void loop() {
   if(micros() - lastImuTime > 10000){ //250hz
     imuReady = false;
 
-    acc[0] = imu.getAccelX_mss();//m/s/s
-    acc[1] = imu.getAccelY_mss();
-    acc[2] = imu.getAccelZ_mss();
+    ahrsIn.Accel_Raw[0] = imu.getAccelX_mss();//m/s/s
+    ahrsIn.Accel_Raw[1] = imu.getAccelY_mss();
+    ahrsIn.Accel_Raw[2] = imu.getAccelZ_mss();
 
-    gyro[0] = imu.getGyroX_rads() * RAD_TO_DEG;//rads
-    gyro[1] = imu.getGyroY_rads() * RAD_TO_DEG;
-    gyro[2] = imu.getGyroZ_rads() * RAD_TO_DEG;
+    ahrsIn.Gyro_Raw[0] = imu.getGyroX_rads() * RAD_TO_DEG;//rads
+    ahrsIn.Gyro_Raw[1] = imu.getGyroY_rads() * RAD_TO_DEG;
+    ahrsIn.Gyro_Raw[2] = imu.getGyroZ_rads() * RAD_TO_DEG;
 
-    mag[0] = imu.getMagX_uT();//uT
-    mag[1] = imu.getMagY_uT();
-    mag[2] = imu.getMagZ_uT();
+    ahrsIn.Mag_Raw[0] = imu.getMagX_uT();//uT
+    ahrsIn.Mag_Raw[1] = imu.getMagY_uT();
+    ahrsIn.Mag_Raw[2] = imu.getMagZ_uT();
 
     // filter.update(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
     // MadgwickAHRSupdate(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], mag[0], mag[1], mag[2]);
-    filter.updateIMU(gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2]);
 
-    mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), filter.q0, filter.q1, filter.q2, filter.q3, gyro[0] / RAD_TO_DEG, gyro[1] / RAD_TO_DEG, gyro[2] / RAD_TO_DEG);
+    imuFusion.setExternalInputs(&ahrsIn);
+    imuFusion.step();
+    auto ahrsOut = imuFusion.getExternalOutputs();
 
-    float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
-    float roll, pitch, yaw;
+    mavlink_msg_attitude_quaternion_pack(1, MAV_COMP_ID_IMU, &msg, millis(), ahrsOut.Quat[0], ahrsOut.Quat[1], ahrsOut.Quat[2], ahrsOut.Quat[3], ahrsIn.Gyro_Raw[0] / RAD_TO_DEG, ahrsIn.Gyro_Raw[1] / RAD_TO_DEG, ahrsIn.Gyro_Raw[2] / RAD_TO_DEG);
 
-    mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
+    //float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+    double roll, pitch, yaw;
+    roll = ahrsOut.Euler[1];
+    pitch = ahrsOut.Euler[2];
+    yaw = ahrsOut.Euler[0];
 
     buffer += micros(); buffer += ',';
     
@@ -184,19 +181,19 @@ void loop() {
     buffer += yaw; buffer += ',';
 
     //Accel
-    buffer += acc[0]; buffer += ',';
-    buffer += acc[1]; buffer += ',';
-    buffer += acc[2]; buffer += ',';
+    buffer += ahrsIn.Accel_Raw[0]; buffer += ',';
+    buffer += ahrsIn.Accel_Raw[1]; buffer += ',';
+    buffer += ahrsIn.Accel_Raw[2]; buffer += ',';
 
     //Gyro
-    buffer += gyro[0]; buffer += ',';
-    buffer += gyro[1]; buffer += ',';
-    buffer += gyro[2]; buffer += ',';
+    buffer += ahrsIn.Gyro_Raw[0]; buffer += ',';
+    buffer += ahrsIn.Gyro_Raw[1]; buffer += ',';
+    buffer += ahrsIn.Gyro_Raw[2]; buffer += ',';
 
     //Mag
-    buffer += mag[0]; buffer += ',';
-    buffer += mag[1]; buffer += ',';
-    buffer += mag[2]; buffer += ',';
+    buffer += ahrsIn.Mag_Raw[0]; buffer += ',';
+    buffer += ahrsIn.Mag_Raw[1]; buffer += ',';
+    buffer += ahrsIn.Mag_Raw[2]; buffer += ',';
     
     buffer += m0; buffer += ',';
     buffer += m1; buffer += ',';
@@ -209,23 +206,23 @@ void loop() {
     if(enableMotionCal){
       //MotionCal
       SerialUSB.print("Raw:");
-      SerialUSB.print(int(acc[0]*8192));
+      SerialUSB.print(int(ahrsIn.Accel_Raw[0]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(acc[1]*8192));
+      SerialUSB.print(int(ahrsIn.Accel_Raw[1]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(acc[2]*8192));
+      SerialUSB.print(int(ahrsIn.Accel_Raw[2]*8192));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[0] * 16));
+      SerialUSB.print(int(ahrsIn.Gyro_Raw[0] * 16));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[1] * 16));
+      SerialUSB.print(int(ahrsIn.Gyro_Raw[1] * 16));
       SerialUSB.print(',');
-      SerialUSB.print(int(gyro[2] * 16));
+      SerialUSB.print(int(ahrsIn.Gyro_Raw[2] * 16));
       SerialUSB.print(',');
-      SerialUSB.print(int(mag[0] * 10));
+      SerialUSB.print(int(ahrsIn.Mag_Raw[0] * 10));
       SerialUSB.print(',');
-      SerialUSB.print(int(mag[1] * 10));
+      SerialUSB.print(int(ahrsIn.Mag_Raw[1] * 10));
       SerialUSB.print(',');
-      SerialUSB.print(int(mag[2] * 10));
+      SerialUSB.print(int(ahrsIn.Mag_Raw[2] * 10));
       SerialUSB.println();
     } else if(enableWebViewer){
       SerialUSB.print(("Orientation: "));
@@ -260,9 +257,12 @@ void loop() {
 
     } else{
       unsigned long dt = (micros() - lastImuTime) / 1000;
-      float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
+      //float q[] = {filter.q0, filter.q1, filter.q2, filter.q3};
       float roll, pitch, yaw;
-      mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
+      roll = ahrsOut.Euler[1];
+      pitch = ahrsOut.Euler[2];
+      yaw = ahrsOut.Euler[0];
+      //mavlink_quaternion_to_euler(q, &roll, &pitch, &yaw);
       //SerialUSB.print("DT: ");
       // SerialUSB.print(dt);
       // SerialUSB.print(',');
